@@ -1,1 +1,1 @@
-Project for the Johns Hopkins Data Science course. Still in progress!
+Project for the Johns Hopkins Data Science course. Creates a random forest model used to predict a small wearables exercise dataset. 

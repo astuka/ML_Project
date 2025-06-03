@@ -1,0 +1,187 @@
+---
+title: "Exercise Form Prediction Analysis"
+author: "Jacob Robinson"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+This analysis aims to predict the manner in which participants performed barbell lifts using data from accelerometers placed on different parts of their bodies. The goal is to build a machine learning model that can accurately classify the exercise form into one of five categories.
+
+## Data Loading and Preprocessing
+
+```{r load_libraries}
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+```
+
+```{r load_data}
+# Load the training and testing datasets
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+
+# Remove columns with mostly NA values
+na_cols <- colSums(is.na(training)) > 0.5 * nrow(training)
+training <- training[, !na_cols]
+testing <- testing[, !na_cols]
+
+# Remove non-predictive columns
+training <- training %>% 
+  select(-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, 
+            cvtd_timestamp, new_window, num_window))
+
+testing <- testing %>% 
+  select(-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, 
+            cvtd_timestamp, new_window, num_window))
+
+# Convert classe to factor
+training$classe <- as.factor(training$classe)
+```
+
+## Exploratory Data Analysis
+
+```{r eda}
+# Distribution of exercise classes
+ggplot(training, aes(x = classe)) +
+  geom_bar(fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Distribution of Exercise Classes",
+       x = "Class",
+       y = "Count")
+
+# Correlation matrix of numeric predictors
+numeric_cols <- sapply(training, is.numeric)
+cor_matrix <- cor(training[, numeric_cols])
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.cex = 0.5, tl.col = "black")
+```
+
+## Model Building
+
+```{r model_building}
+# Set seed for reproducibility
+set.seed(123)
+
+# Create training and validation sets
+inTrain <- createDataPartition(training$classe, p = 0.7, list = FALSE)
+train_data <- training[inTrain, ]
+valid_data <- training[-inTrain, ]
+
+# Train Random Forest model
+rf_model <- randomForest(classe ~ ., data = train_data, 
+                        ntree = 100, importance = TRUE)
+
+# Print model summary
+print(rf_model)
+
+# Variable importance plot
+varImpPlot(rf_model, main = "Variable Importance")
+```
+
+## Model Validation
+
+```{r model_validation}
+# Make predictions on validation set
+rf_pred <- predict(rf_model, valid_data)
+
+# Create confusion matrix
+conf_matrix <- confusionMatrix(rf_pred, valid_data$classe)
+print(conf_matrix)
+
+# Calculate accuracy and error rates
+accuracy <- conf_matrix$overall["Accuracy"]
+error_rate <- 1 - accuracy
+
+cat("Model Accuracy:", round(accuracy * 100, 2), "%\n")
+cat("Error Rate:", round(error_rate * 100, 2), "%\n")
+```
+
+## Cross-Validation
+
+```{r cross_validation}
+# Set up parallel processing
+library(doParallel)
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Create a smaller subset for cross-validation to speed up computation
+set.seed(123)
+cv_subset <- training[sample(nrow(training), 5000), ]
+
+# Perform 5-fold cross-validation with parallel processing
+cv_control <- trainControl(method = "cv", 
+                          number = 5,
+                          allowParallel = TRUE)
+
+cv_model <- train(classe ~ ., 
+                 data = cv_subset,
+                 method = "rf",
+                 trControl = cv_control,
+                 ntree = 50)  # Reduced number of trees for faster computation
+
+# Stop parallel processing
+stopCluster(cl)
+
+# Print cross-validation results
+print(cv_model)
+
+# Calculate and print the expected out-of-sample error
+cv_error <- 1 - max(cv_model$results$Accuracy)
+cat("\nExpected out-of-sample error:", round(cv_error * 100, 2), "%\n")
+```
+
+## Final Predictions
+
+```{r final_predictions}
+# Remove 'problem_id' from predictors if present
+test_predictors <- testing %>% select(-problem_id)
+
+# Ensure only columns used in training (excluding 'classe') are present and in the same order
+model_cols <- names(train_data)[names(train_data) != "classe"]
+test_predictors <- test_predictors[, model_cols]
+
+# Convert all columns to numeric (non-numeric will become NA)
+test_predictors[] <- lapply(test_predictors, function(x) as.numeric(as.character(x)))
+
+# Replace NA values with 0 (or use median if you prefer)
+test_predictors[is.na(test_predictors)] <- 0
+
+# Make predictions
+test_predictions <- predict(rf_model, test_predictors)
+
+# Create submission format
+submission <- data.frame(
+  problem_id = testing$problem_id,
+  predicted_class = test_predictions
+)
+
+# Print predictions
+print(submission)
+print(table(test_predictions))
+```
+
+## Conclusion
+
+The analysis shows that the Random Forest model performs well in predicting exercise form based on accelerometer data. The model achieves high accuracy on the validation set, and cross-validation results confirm its robustness. The expected out-of-sample error is relatively low, indicating good generalization to new data.
+
+Key findings:
+1. The Random Forest model was chosen for its ability to handle non-linear relationships and its robustness to overfitting
+2. Cross-validation was used to ensure the model's performance is consistent across different data splits
+3. The model's accuracy on the validation set suggests it will perform well on new data
+4. Variable importance analysis reveals which sensors and measurements are most predictive of exercise form
+
+The final predictions for the 20 test cases are provided above.
